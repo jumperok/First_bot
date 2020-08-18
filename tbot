@@ -1,0 +1,222 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+type GetMeT struct {
+	Ok bool `json:"ok"`
+	Result GetMeResultT `json:"result"`
+}
+type GetMeResultT struct {
+	Id int `json:"id"`
+	IsBot bool `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username string `json:"username"`
+}
+type SendMessageT struct {
+	Ok     bool `json:"ok"`
+	Result MessageT `json:"result"`
+}
+type GetUpdatesT struct {
+	Ok     bool `json:"ok"`
+	Result []GetUpdatesResultT `json:"result"`
+}
+type GetUpdatesResultT struct {
+	UpdateID int `json:"update_id"`
+	Message  GetUpdatesMessageT `json:"message,omitempty"`
+}
+type GetUpdatesMessageT struct {
+	MessageID int `json:"message_id"`
+	From      struct {
+		ID           int    `json:"id"`
+		IsBot        bool   `json:"is_bot"`
+		FirstName    string `json:"first_name"`
+		LastName     string `json:"last_name"`
+		Username     string `json:"username"`
+		LanguageCode string `json:"language_code"`
+	} `json:"from"`
+	Chat struct {
+		ID        int    `json:"id"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Username  string `json:"username"`
+		Type      string `json:"type"`
+	} `json:"chat"`
+	Date     int    `json:"date"`
+	Text     string `json:"text"`
+	Entities []struct {
+		Offset int    `json:"offset"`
+		Length int    `json:"length"`
+		Type   string `json:"type"`
+	} `json:"entities"`
+}
+type MessageT struct {
+	MessageID int `json:"message_id"`
+	From      GetUpdatesResultMessageFromT `json:"from"`
+	Chat      GetUpdatesResultMessageChatT `json:"chat"`
+	Date      int    `json:"date"`
+	Text      string `json:"text"`
+}
+type GetUpdatesResultMessageFromT struct {
+	ID           int    `json:"id"`
+	IsBot        bool   `json:"is_bot"`
+	FirstName    string `json:"first_name"`
+	Username     string `json:"username"`
+	LanguageCode string `json:"language_code"`
+}
+type GetUpdatesResultMessageChatT struct {
+	ID        int    `json:"id"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
+	Type      string `json:"type"`
+}
+const (
+	telegramBaseUrl = "https://api.telegram.org/bot"
+	telegramToken = "845226467:AAFf1hLjcqgQ-iz_TZywIxo0BJwHS5OQg_A"
+	methodGetMe = "getMe"
+	methodGetUpdates = "getUpdates"
+	methodSendMessage = "sendMessage"
+)
+var replyDB = map[string]string {
+	"start": "Hola! write please /help",
+	"help": "На данный момент во мне заложено мало возможностей :" +
+		"веддите запросы и я отвечу :" +
+		"hello, hi, goodbye, bye, norm, bad, cool, bot, life," +
+		" stupid, idea, know, song, video, city" +
+		"Так же можете отправить не корректное сообщение и мы произведем интерактив :)",
+	"hello": "Hi",
+	"hi": "hello",
+	"goodbye": "Bye",
+	"bye": "goodbye",
+	"problem": "How can I help you?",
+	"norm": "it's cool!",
+	"bad": "Don't worry, be happy !",
+	"cool": "you are luсky!",
+	"bot": "What your say **** ?",
+	"life": "Yep i'm real !",
+	"stupid": "i'm agry!",
+	"idea": "That's cool",
+	"know": "I know nothing. But you do know",
+	"song": "https://www.youtube.com/watch?v=tFCKvPMbGrc",
+	"video": "https://www.youtube.com/watch?v=-4p0LJaIeSM",
+	"city": "https://www.youtube.com/watch?v=qK-aCEj6dfo",
+}
+var questionDB = []string {
+	"how was your day?",
+	"say me song ?",
+	"do you like computers?",
+	"do you think i am alive or a bot?",
+	"write the word city, and I'll tell you something",
+	"Write the word song",
+	"Write the word video",
+}
+func main() {
+	rand.Seed(time.Now().UnixNano())
+
+	offset := 1
+	for {
+		updates, err := getUpdates(offset)
+		if err != nil {
+			fmt.Println("error on poll, %v", err)
+			continue
+		}
+		for _, item := range (updates.Result) {
+			log.Printf("%s: %q", item.Message.From.Username, item.Message.Text)
+			offset = item.UpdateID + 1
+
+			cannonText := strings.TrimSpace(item.Message.Text)
+			cannonText = strings.ToLower(cannonText)
+
+			words := parseWords(strings.NewReader(cannonText))
+
+			replied := false
+			for k, v := range replyDB {
+				contains := false
+				for _, word := range words {
+					if k[0] == '^' && strings.HasPrefix(word, k[1:]) {
+						contains = true
+					} else if word == k {
+						contains = true
+					}
+				}
+				if contains {
+					sendMessage(item.Message.Chat.ID, v)
+					replied = true
+					break
+				}
+			}
+			if !replied {
+				i := rand.Intn(len(questionDB))
+				msg := fmt.Sprintf("I don't know :(%%0AInstead, %s", questionDB[i])
+				sendMessage(item.Message.Chat.ID, msg)
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+func parseWords(r io.Reader) []string {
+	scanner := bufio.NewScanner(r)
+
+	split := func (data []byte, atEOF bool) (advance int, token []byte, err error) {
+		advance, token, err = bufio.ScanWords(data, atEOF)
+		if err == nil && token != nil {
+			token = bytes.Trim(token, ",.!:@#$%^&*(){}[]=+?/\"'`<>")
+		}
+		return
+	}
+	scanner.Split(split)
+
+	var words []string
+
+	for scanner.Scan() {
+		words = append(words, scanner.Text())
+	}
+
+	return words
+}
+func sendMessage(chatID int, msg string) {
+	sendMessageURL := getMethodURL(methodSendMessage)
+	targetURL := sendMessageURL  + "?chat_id=" + strconv.Itoa(chatID) + "&text=" + msg
+	_ = fetchResponseBody(targetURL)
+}
+func getUpdates(offset int) (*GetUpdatesT, error) {
+	u := &GetUpdatesT{}
+
+	apiRequestURL := getMethodURL(methodGetUpdates) + "?offset=" + strconv.Itoa(offset)
+	fmt.Println("request: ", apiRequestURL)
+	respBody := fetchResponseBody(apiRequestURL)
+
+	err := json.Unmarshal(respBody, &u)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse json response for getUpdates (offset=%d), %v,", offset, err)
+	}
+
+	return u, err
+}
+func getMethodURL(methodName string) string {
+	return telegramBaseUrl + telegramToken + "/" + methodName
+}
+func fetchResponseBody(url string) []byte {
+	response, err := http.Get(url)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	defer response.Body.Close()
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
+	return body
+}
